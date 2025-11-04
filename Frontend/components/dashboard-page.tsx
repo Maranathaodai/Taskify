@@ -5,7 +5,7 @@ import { Button } from "@/components/button"
 import { Input } from "@/components/input"
 import { Card, CardHeader, CardContent, CardTitle } from "@/components/card"
 import { useTheme } from "@/components/theme-provider"
-import { Moon, Sun, LogOut, Plus, Trash2, CheckCircle, Circle, ChevronDown } from "lucide-react"
+import { Moon, Sun, LogOut, Plus, Trash2, CheckCircle, Circle, ChevronDown, User as UserIcon } from "lucide-react"
 
 interface Task {
   id: string
@@ -13,6 +13,12 @@ interface Task {
   completed: boolean
   createdAt: Date
   userId: string
+}
+
+interface TeamMember {
+  id: string // use email or generated id
+  name: string
+  email: string
 }
 
 interface DashboardPageProps {
@@ -30,6 +36,10 @@ export function DashboardPage({ onLogout }: DashboardPageProps) {
   const [scrollY, setScrollY] = useState(0)
   const [statsVisible, setStatsVisible] = useState(false)
   const [statusDropdownOpen, setStatusDropdownOpen] = useState<string | null>(null)
+  const [assignDropdownOpen, setAssignDropdownOpen] = useState<string | null>(null)
+  const [teamMembers, setTeamMembers] = useState<TeamMember[]>([])
+  const [newMemberName, setNewMemberName] = useState("")
+  const [newMemberEmail, setNewMemberEmail] = useState("")
 
   useEffect(() => {
     const name = localStorage.getItem("userName") || "User"
@@ -46,6 +56,18 @@ export function DashboardPage({ onLogout }: DashboardPageProps) {
         })),
       )
     }
+
+    // Load team members; ensure current user exists as a member
+    const savedMembers = localStorage.getItem("teamMembers")
+    let members: TeamMember[] = []
+    if (savedMembers) {
+      members = JSON.parse(savedMembers)
+    }
+    if (id && !members.find((m) => m.id === id)) {
+      members.push({ id, name, email: localStorage.getItem("userEmail") || id })
+    }
+    setTeamMembers(members)
+    localStorage.setItem("teamMembers", JSON.stringify(members))
   }, [])
 
   useEffect(() => {
@@ -60,6 +82,11 @@ export function DashboardPage({ onLogout }: DashboardPageProps) {
   const saveTasks = (newTasks: Task[]) => {
     setTasks(newTasks)
     localStorage.setItem("tasks", JSON.stringify(newTasks))
+  }
+
+  const saveMembers = (members: TeamMember[]) => {
+    setTeamMembers(members)
+    localStorage.setItem("teamMembers", JSON.stringify(members))
   }
 
   const addTask = () => {
@@ -90,13 +117,23 @@ export function DashboardPage({ onLogout }: DashboardPageProps) {
     saveTasks(tasks.filter((t) => t.id !== id))
   }
 
-  const filteredTasks = tasks.filter((t) => {
-    if (filter === "myTasks") return t.userId === userId && !t.completed
+  const assignTask = (taskId: string, memberId?: string) => {
+    saveTasks(
+      tasks.map((t) => (t.id === taskId ? { ...t, // store assigned user id on task
+        // backward compatibility: keep creator in userId, add assignedTo separately
+        // we store it under a dynamic field to avoid breaking saved data
+        ...(memberId !== undefined ? { assignedTo: memberId } : { assignedTo: undefined }) } : t)),
+    )
+    setAssignDropdownOpen(null)
+  }
+
+  const filteredTasks = tasks.filter((t: any) => {
+    if (filter === "myTasks") return t.assignedTo === userId && !t.completed
     if (filter === "completed") return t.completed
     return true
   })
 
-  const myTasks = tasks.filter((t) => t.userId === userId)
+  const myTasks = tasks.filter((t: any) => t.assignedTo === userId)
   const completedCount = tasks.filter((t) => t.completed).length
   const activeCount = tasks.filter((t) => !t.completed).length
   const myTasksCount = myTasks.filter((t) => !t.completed).length
@@ -228,7 +265,7 @@ export function DashboardPage({ onLogout }: DashboardPageProps) {
                     {tasks.length === 0 ? "No tasks yet. Create one to get started!" : "No tasks in this filter."}
                   </p>
                 ) : (
-                  filteredTasks.map((task) => (
+                  filteredTasks.map((task: any) => (
                     <div
                       key={task.id}
                       className="flex items-center gap-3 p-4 rounded-md border border-border hover:bg-card transition-colors group"
@@ -240,9 +277,19 @@ export function DashboardPage({ onLogout }: DashboardPageProps) {
                           <Circle className="w-5 h-5 text-muted" />
                         )}
                       </button>
-                      <span className={`flex-1 ${task.completed ? "line-through text-muted" : "text-foreground"}`}>
-                        {task.title}
-                      </span>
+                      <div className="flex-1">
+                        <div className={`${task.completed ? "line-through text-muted" : "text-foreground"}`}>
+                          {task.title}
+                        </div>
+                        <div className="mt-1 text-xs text-muted flex items-center gap-2">
+                          <UserIcon className="w-3.5 h-3.5" />
+                          <span>
+                            {task.assignedTo
+                              ? teamMembers.find((m) => m.id === task.assignedTo)?.name || task.assignedTo
+                              : "Unassigned"}
+                          </span>
+                        </div>
+                      </div>
                       <div className="flex items-center gap-2">
                         {/* Status Dropdown */}
                         <div className="relative">
@@ -276,6 +323,39 @@ export function DashboardPage({ onLogout }: DashboardPageProps) {
                             </>
                           )}
                         </div>
+                        {/* Assign Dropdown */}
+                        <div className="relative">
+                          <button
+                            onClick={() => setAssignDropdownOpen(assignDropdownOpen === task.id ? null : task.id)}
+                            className="flex items-center gap-1 px-3 py-1.5 text-sm rounded-md border border-border hover:bg-background transition-colors"
+                            title="Assign"
+                          >
+                            <span className="text-xs">Assign</span>
+                            <ChevronDown className="w-4 h-4" />
+                          </button>
+                          {assignDropdownOpen === task.id && (
+                            <>
+                              <div className="fixed inset-0 z-10" onClick={() => setAssignDropdownOpen(null)} />
+                              <div className="absolute right-0 mt-1 w-44 bg-card border border-border rounded-md shadow-lg z-20 max-h-60 overflow-auto">
+                                <button
+                                  onClick={() => assignTask(task.id, undefined)}
+                                  className="w-full text-left px-3 py-2 text-sm hover:bg-background transition-colors"
+                                >
+                                  Unassign
+                                </button>
+                                {teamMembers.map((m) => (
+                                  <button
+                                    key={m.id}
+                                    onClick={() => assignTask(task.id, m.id)}
+                                    className="w-full text-left px-3 py-2 text-sm hover:bg-background transition-colors"
+                                  >
+                                    {m.name} ({m.email})
+                                  </button>
+                                ))}
+                              </div>
+                            </>
+                          )}
+                        </div>
                         <button
                           onClick={() => deleteTask(task.id)}
                           className="flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity p-1.5 hover:bg-destructive/10 rounded-md"
@@ -287,6 +367,61 @@ export function DashboardPage({ onLogout }: DashboardPageProps) {
                     </div>
                   ))
                 )}
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Team Members Section */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Team Members</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="flex flex-col gap-4">
+                <div className="flex flex-wrap gap-3">
+                  {teamMembers.length === 0 ? (
+                    <p className="text-sm text-muted">No team members yet.</p>
+                  ) : (
+                    teamMembers.map((m) => (
+                      <div key={m.id} className="flex items-center gap-2 rounded-md border border-border px-3 py-1.5">
+                        <UserIcon className="w-4 h-4" />
+                        <div className="text-sm">
+                          <div className="font-medium">{m.name}</div>
+                          <div className="text-muted text-xs">{m.email}</div>
+                        </div>
+                        <button
+                          className="ml-2 text-xs text-destructive hover:underline"
+                          onClick={() => saveMembers(teamMembers.filter((tm) => tm.id !== m.id))}
+                          title="Remove member"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
+                <div className="flex flex-col sm:flex-row gap-3">
+                  <Input placeholder="Member name" value={newMemberName} onChange={(e) => setNewMemberName(e.target.value)} />
+                  <Input placeholder="Member email" value={newMemberEmail} onChange={(e) => setNewMemberEmail(e.target.value)} />
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      const name = newMemberName.trim()
+                      const email = newMemberEmail.trim()
+                      if (!name || !email) return
+                      const exists = teamMembers.find((m) => m.id === email)
+                      const next = exists
+                        ? teamMembers.map((m) => (m.id === email ? { ...m, name, email } : m))
+                        : [...teamMembers, { id: email, name, email }]
+                      saveMembers(next)
+                      setNewMemberName("")
+                      setNewMemberEmail("")
+                    }}
+                  >
+                    Add Member
+                  </Button>
+                </div>
+                <p className="text-xs text-muted">Tip: members are stored locally for now. Backend integration will replace this.</p>
               </div>
             </CardContent>
           </Card>

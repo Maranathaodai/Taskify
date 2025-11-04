@@ -1,0 +1,30 @@
+# Node
+node_modules/
+
+# Next.js
+.next/
+
+# Build
+dist/
+
+# dotenv
+.env
+.env.*
+
+# Backend local env specifically
+Backend/.env
+Frontend/.env
+
+# Logs
+npm-debug.log*
+pnpm-debug.log*
+
+# OS
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
+
+# Misc
+coverage/

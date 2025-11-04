@@ -26,11 +26,15 @@ export default function Home() {
     localStorage.removeItem("userId")
     localStorage.removeItem("userEmail")
     localStorage.removeItem("userName")
+    localStorage.removeItem("userRole")
+    localStorage.removeItem("adminEmail")
     setAuthenticated(false)
   }
 
+  const role = (typeof window !== 'undefined' ? (localStorage.getItem("userRole") as "admin" | "member" | null) : null) || "admin"
+
   return authenticated ? (
-    <DashboardPage onLogout={handleLogout} />
+    <DashboardPage onLogout={handleLogout} role={role} />
   ) : (
     <AuthPage onAuthSuccess={handleAuthSuccess} />
   )

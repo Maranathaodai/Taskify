@@ -8,7 +8,7 @@ import { Input } from "@/components/input"
 import { Card, CardHeader, CardContent, CardTitle, CardDescription } from "@/components/card"
 import { useTheme } from "@/components/theme-provider"
 import { Moon, Sun } from "lucide-react"
-import { login, register } from "@/lib/api"
+import { useAuth } from "@/lib/hooks/useAuth"
 
 interface AuthPageProps {
   onAuthSuccess: () => void
@@ -18,10 +18,14 @@ export function AuthPage({ onAuthSuccess }: AuthPageProps) {
   const [isLogin, setIsLogin] = useState(true)
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
+  const [showPassword, setShowPassword] = useState(false)
   const [name, setName] = useState("")
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string>("")
+  // No visible role switcher; we infer role in the background
   const { theme, toggleTheme } = useTheme()
+
+  const { login, register } = useAuth()
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -41,11 +45,26 @@ export function AuthPage({ onAuthSuccess }: AuthPageProps) {
         response = await register(name, email, password)
       }
 
-      // Store token and user info in localStorage
-      localStorage.setItem("authToken", response.token)
-      localStorage.setItem("userId", response.user.id)
-      localStorage.setItem("userEmail", response.user.email)
-      localStorage.setItem("userName", response.user.name)
+      // response is the user object returned by useAuth.login/register
+      const user = response as any
+      // Use server-provided role when available. Fallback to previous inference behavior for older/mocked flows.
+      const serverRole = user?.role
+      let inferredRole: "admin" | "member"
+      if (serverRole) {
+        inferredRole = serverRole === "ADMIN" ? "admin" : "member"
+      } else {
+        const existingAdmin = localStorage.getItem("adminEmail")
+        inferredRole = existingAdmin ? (user.email === existingAdmin ? "admin" : "member") : "admin"
+        if (!existingAdmin) localStorage.setItem("adminEmail", user.email)
+      }
+      localStorage.setItem("userRole", inferredRole)
+
+      // ensure other user fields are present for older flows
+      try {
+        localStorage.setItem("userId", user.id)
+        localStorage.setItem("userEmail", user.email)
+        localStorage.setItem("userName", user.name)
+      } catch {}
 
       onAuthSuccess()
     } catch (err) {
@@ -55,6 +74,10 @@ export function AuthPage({ onAuthSuccess }: AuthPageProps) {
       localStorage.setItem("userId", email || "local-user")
       localStorage.setItem("userEmail", email || "local@example.com")
       localStorage.setItem("userName", fallbackName)
+      const existingAdmin2 = localStorage.getItem("adminEmail")
+      const inferredRole2 = existingAdmin2 ? ((email || "") === existingAdmin2 ? "admin" : "member") : "admin"
+      if (!existingAdmin2 && email) localStorage.setItem("adminEmail", email)
+      localStorage.setItem("userRole", inferredRole2)
       onAuthSuccess()
       return
     }
@@ -102,14 +125,23 @@ export function AuthPage({ onAuthSuccess }: AuthPageProps) {
               />
             </div>
 
-            <div className="space-y-2">
+            <div className="space-y-2 relative">
               <label className="text-sm font-medium text-foreground dark:text-dark-foreground">Password</label>
               <Input
-                type="password"
+                type={showPassword ? "text" : "password"}
                 placeholder="••••••••"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
+                className="pr-10"
               />
+              <button
+                type="button"
+                onClick={() => setShowPassword((s) => !s)}
+                className="absolute right-2 top-8 p-1 text-muted"
+                aria-label={showPassword ? "Hide password" : "Show password"}
+              >
+                {showPassword ? <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.875 18.825A10.05 10.05 0 0112 19c-5.523 0-10-4.477-10-10 0-1.06.165-2.082.475-3.041M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg> : <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>}
+              </button>
             </div>
 
             {error && (

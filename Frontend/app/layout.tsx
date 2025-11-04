@@ -13,7 +13,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className={inter.className}>
+      <body className={inter.className} suppressHydrationWarning>
         <ThemeProvider>{children}</ThemeProvider>
       </body>
     </html>
@@ -21,5 +21,5 @@ export default function RootLayout({
 }
 
 export const metadata = {
-      generator: 'v0.app'
-    };
+  generator: "v0.app",
+}

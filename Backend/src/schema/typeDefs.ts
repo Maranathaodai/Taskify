@@ -26,6 +26,15 @@ export const typeDefs = /* GraphQL */ `#graphql
     updatedAt: Date!
   }
 
+  type PendingAssignment {
+    id: ID!
+    email: String!
+    task: Task!
+    invitedBy: User!
+    createdAt: Date!
+    updatedAt: Date!
+  }
+
   input TaskFilter {
     mine: Boolean
     completed: Boolean
@@ -39,6 +48,8 @@ export const typeDefs = /* GraphQL */ `#graphql
   type Query {
     me: User
     tasks(filter: TaskFilter): [Task!]!
+    users: [User!]!
+    pendingAssignments: [PendingAssignment!]!
   }
 
   type Mutation {
@@ -50,6 +61,11 @@ export const typeDefs = /* GraphQL */ `#graphql
     toggleTaskComplete(id: ID!): Task!
     deleteTask(id: ID!): Boolean!
     assignTask(id: ID!, userId: ID): Task!
+    # Assign a task by email. If user exists, assigns immediately. If not, creates a PendingAssignment that will be resolved when the user registers.
+    assignTaskByEmail(id: ID!, email: String!): Task!
+    # Admins may resend a pending assignment (no-op for now but updates timestamp) or cancel it.
+    resendPendingAssignment(id: ID!): PendingAssignment!
+    cancelPendingAssignment(id: ID!): Boolean!
   }
 `
 

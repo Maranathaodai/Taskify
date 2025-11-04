@@ -1,11 +1,15 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useMemo } from "react"
 import { Button } from "@/components/button"
 import { Input } from "@/components/input"
 import { Card, CardHeader, CardContent, CardTitle } from "@/components/card"
 import { useTheme } from "@/components/theme-provider"
 import { Moon, Sun, LogOut, Plus, Trash2, CheckCircle, Circle, ChevronDown, User as UserIcon } from "lucide-react"
+import { useTasks } from "@/lib/hooks/useTasks"
+import { useUsers } from "@/lib/hooks/useUsers"
+import { UserPicker } from "@/components/user-picker"
+import { usePendingAssignments } from "@/lib/hooks/usePendingAssignments"
 
 interface Task {
   id: string
@@ -13,6 +17,9 @@ interface Task {
   completed: boolean
   createdAt: Date
   userId: string
+  assignedTo?: string | undefined
+  createdBy?: string | undefined
+  description?: string | undefined
 }
 
 interface TeamMember {
@@ -23,9 +30,10 @@ interface TeamMember {
 
 interface DashboardPageProps {
   onLogout: () => void
+  role?: "admin" | "member"
 }
 
-export function DashboardPage({ onLogout }: DashboardPageProps) {
+export function DashboardPage({ onLogout, role = "admin" }: DashboardPageProps) {
   const [tasks, setTasks] = useState<Task[]>([])
   const [newTaskTitle, setNewTaskTitle] = useState("")
   const [filter, setFilter] = useState<"all" | "myTasks" | "completed">("all")
@@ -41,34 +49,59 @@ export function DashboardPage({ onLogout }: DashboardPageProps) {
   const [newMemberName, setNewMemberName] = useState("")
   const [newMemberEmail, setNewMemberEmail] = useState("")
 
+  const taskFilter = useMemo(() => (role === "admin" ? { mine: false } : { mine: true }), [role])
+  const { tasks: remoteTasks, loading: tasksLoading, refetch: refetchTasks } = useTasks(taskFilter)
+  const { users: backendUsers, loading: usersLoading } = useUsers()
+
   useEffect(() => {
     const name = localStorage.getItem("userName") || "User"
     const id = localStorage.getItem("userId") || localStorage.getItem("userEmail") || ""
     setUserName(name)
     setUserId(id)
-    const savedTasks = localStorage.getItem("tasks")
-    if (savedTasks) {
-      setTasks(
-        JSON.parse(savedTasks).map((t: any) => ({
-          ...t,
-          createdAt: new Date(t.createdAt),
-          userId: t.userId || id, // Ensure old tasks get userId
-        })),
-      )
+
+    // If backend returned tasks (we're authenticated), use them. Otherwise fall back to localStorage.
+    if (remoteTasks && remoteTasks.length > 0) {
+      const mapped = remoteTasks.map((t: any) => ({
+        id: t.id,
+        title: t.title,
+        completed: t.completed,
+        createdAt: new Date(t.createdAt),
+        assignedTo: t.assignedTo?.id,
+        createdBy: t.createdBy?.id,
+        userId: t.createdBy?.id ?? "",
+      }))
+      setTasks(mapped)
+    } else {
+      const savedTasks = localStorage.getItem("tasks")
+      if (savedTasks) {
+        setTasks(
+          JSON.parse(savedTasks).map((t: any) => ({
+            ...t,
+            createdAt: new Date(t.createdAt),
+            userId: t.userId || id, // Ensure old tasks get userId
+          })),
+        )
+      }
     }
 
-    // Load team members; ensure current user exists as a member
-    const savedMembers = localStorage.getItem("teamMembers")
-    let members: TeamMember[] = []
-    if (savedMembers) {
-      members = JSON.parse(savedMembers)
+    // Load team members: prefer backend users for admins, otherwise local storage
+    if (role === "admin" && backendUsers && backendUsers.length > 0) {
+      const members = backendUsers.map((u: any) => ({ id: u.id, name: u.name, email: u.email }))
+      setTeamMembers(members)
+      localStorage.setItem("teamMembers", JSON.stringify(members))
+    } else {
+      const savedMembers = localStorage.getItem("teamMembers")
+      let members: TeamMember[] = []
+      if (savedMembers) {
+        members = JSON.parse(savedMembers)
+      }
+      if (id && !members.find((m) => m.id === id)) {
+        members.push({ id, name, email: localStorage.getItem("userEmail") || id })
+      }
+      setTeamMembers(members)
+      localStorage.setItem("teamMembers", JSON.stringify(members))
     }
-    if (id && !members.find((m) => m.id === id)) {
-      members.push({ id, name, email: localStorage.getItem("userEmail") || id })
-    }
-    setTeamMembers(members)
-    localStorage.setItem("teamMembers", JSON.stringify(members))
-  }, [])
+  }, [remoteTasks, backendUsers])
 
   useEffect(() => {
     const handleScroll = () => {
@@ -127,8 +160,9 @@ export function DashboardPage({ onLogout }: DashboardPageProps) {
     setAssignDropdownOpen(null)
   }
 
-  const filteredTasks = tasks.filter((t: any) => {
-    if (filter === "myTasks") return t.assignedTo === userId && !t.completed
+  const visible = (tasks as any[]).filter((t: any) => (role === "member" ? t.assignedTo === userId : true))
+  const filteredTasks = visible.filter((t: any) => {
+    if (filter === "myTasks") return (role === "member" ? true : t.assignedTo === userId) && !t.completed
     if (filter === "completed") return t.completed
     return true
   })
@@ -137,6 +171,7 @@ export function DashboardPage({ onLogout }: DashboardPageProps) {
   const completedCount = tasks.filter((t) => t.completed).length
   const activeCount = tasks.filter((t) => !t.completed).length
   const myTasksCount = myTasks.filter((t) => !t.completed).length
+  const { pending: pendingAssignments, loading: pendingLoading, resend, cancel } = usePendingAssignments()
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -218,10 +253,12 @@ export function DashboardPage({ onLogout }: DashboardPageProps) {
               <div>
                 <CardTitle>Your Tasks</CardTitle>
               </div>
-              <Button variant="primary" size="sm" onClick={() => setShowModal(true)} className="gap-2">
-                <Plus className="w-4 h-4" />
-                New Task
-              </Button>
+              {role === "admin" && (
+                <Button variant="primary" size="sm" onClick={() => setShowModal(true)} className="gap-2">
+                  <Plus className="w-4 h-4" />
+                  New Task
+                </Button>
+              )}
             </CardHeader>
             <CardContent>
               {/* Filters */}
@@ -284,14 +321,18 @@ export function DashboardPage({ onLogout }: DashboardPageProps) {
                         <div className="mt-1 text-xs text-muted flex items-center gap-2">
                           <UserIcon className="w-3.5 h-3.5" />
                           <span>
-                            {task.assignedTo
-                              ? teamMembers.find((m) => m.id === task.assignedTo)?.name || task.assignedTo
-                              : "Unassigned"}
+                            {(() => {
+                              const pending = pendingAssignments.find((p: any) => p.task?.id === task.id)
+                              if (pending) return `Invited: ${pending.email}`
+                              return task.assignedTo
+                                ? teamMembers.find((m) => m.id === task.assignedTo)?.name || task.assignedTo
+                                : "Unassigned"
+                            })()}
                           </span>
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
-                        {/* Status Dropdown */}
+                        {/* Status Dropdown (both can update own task status; admin can update any) */}
                         <div className="relative">
                           <button
                             onClick={() => setStatusDropdownOpen(statusDropdownOpen === task.id ? null : task.id)}
@@ -323,46 +364,46 @@ export function DashboardPage({ onLogout }: DashboardPageProps) {
                             </>
                           )}
                         </div>
-                        {/* Assign Dropdown */}
-                        <div className="relative">
-                          <button
-                            onClick={() => setAssignDropdownOpen(assignDropdownOpen === task.id ? null : task.id)}
-                            className="flex items-center gap-1 px-3 py-1.5 text-sm rounded-md border border-border hover:bg-background transition-colors"
-                            title="Assign"
-                          >
-                            <span className="text-xs">Assign</span>
-                            <ChevronDown className="w-4 h-4" />
-                          </button>
-                          {assignDropdownOpen === task.id && (
-                            <>
-                              <div className="fixed inset-0 z-10" onClick={() => setAssignDropdownOpen(null)} />
-                              <div className="absolute right-0 mt-1 w-44 bg-card border border-border rounded-md shadow-lg z-20 max-h-60 overflow-auto">
-                                <button
-                                  onClick={() => assignTask(task.id, undefined)}
-                                  className="w-full text-left px-3 py-2 text-sm hover:bg-background transition-colors"
-                                >
-                                  Unassign
-                                </button>
-                                {teamMembers.map((m) => (
-                                  <button
-                                    key={m.id}
-                                    onClick={() => assignTask(task.id, m.id)}
-                                    className="w-full text-left px-3 py-2 text-sm hover:bg-background transition-colors"
-                                  >
-                                    {m.name} ({m.email})
-                                  </button>
-                                ))}
-                              </div>
-                            </>
-                          )}
-                        </div>
-                        <button
-                          onClick={() => deleteTask(task.id)}
-                          className="flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity p-1.5 hover:bg-destructive/10 rounded-md"
-                          title="Delete task"
-                        >
-                          <Trash2 className="w-4 h-4 text-muted hover:text-destructive" />
-                        </button>
+                        {role === "admin" && (
+                          <>
+                            {/* Assign Dropdown */}
+                            <div className="relative">
+                              <button
+                                onClick={() => setAssignDropdownOpen(assignDropdownOpen === task.id ? null : task.id)}
+                                className="flex items-center gap-1 px-3 py-1.5 text-sm rounded-md border border-border hover:bg-background transition-colors"
+                                title="Assign"
+                              >
+                                <span className="text-xs">Assign</span>
+                                <ChevronDown className="w-4 h-4" />
+                              </button>
+                              {assignDropdownOpen === task.id && (
+                                <>
+                                  <div className="fixed inset-0 z-10" onClick={() => setAssignDropdownOpen(null)} />
+                                  <div className="absolute right-0 mt-1 w-44 bg-card border border-border rounded-md shadow-lg z-20 max-h-60 overflow-auto">
+                                    {/* Use the backend-powered UserPicker (falls back to local members if backend not available) */}
+                                    <UserPicker
+                                      taskId={task.id}
+                                      onAssigned={(res: any) => {
+                                        // Update the local tasks store to reflect assignment change when backend responds
+                                        saveTasks(
+                                          tasks.map((t) => (t.id === res.id ? { ...t, assignedTo: res.assignedTo?.id ?? undefined } : t)),
+                                        )
+                                        setAssignDropdownOpen(null)
+                                      }}
+                                    />
+                                  </div>
+                                </>
+                              )}
+                            </div>
+                            <button
+                              onClick={() => deleteTask(task.id)}
+                              className="flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity p-1.5 hover:bg-destructive/10 rounded-md"
+                              title="Delete task"
+                            >
+                              <Trash2 className="w-4 h-4 text-muted hover:text-destructive" />
+                            </button>
+                          </>
+                        )}
                       </div>
                     </div>
                   ))
@@ -371,12 +412,13 @@ export function DashboardPage({ onLogout }: DashboardPageProps) {
             </CardContent>
           </Card>
 
-          {/* Team Members Section */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Team Members</CardTitle>
-            </CardHeader>
-            <CardContent>
+          {/* Team Members Section (admin only) */}
+          {role === "admin" && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Team Members</CardTitle>
+              </CardHeader>
+              <CardContent>
               <div className="flex flex-col gap-4">
                 <div className="flex flex-wrap gap-3">
                   {teamMembers.length === 0 ? (
@@ -423,13 +465,50 @@ export function DashboardPage({ onLogout }: DashboardPageProps) {
                 </div>
                 <p className="text-xs text-muted">Tip: members are stored locally for now. Backend integration will replace this.</p>
               </div>
-            </CardContent>
-          </Card>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Pending Assignments (admin only) */}
+          {role === "admin" && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Pending Invites</CardTitle>
+              </CardHeader>
+              <CardContent>
+                {pendingLoading ? (
+                  <div className="text-sm text-muted">Loading...</div>
+                ) : pendingAssignments.length === 0 ? (
+                  <div className="text-sm text-muted">No pending invites.</div>
+                ) : (
+                  <div className="flex flex-col gap-3">
+                    {pendingAssignments.map((p: any) => (
+                      <div key={p.id} className="flex items-center justify-between gap-3 px-3 py-2 border border-border rounded-md">
+                        <div>
+                          <div className="text-sm font-medium">{p.email}</div>
+                          <div className="text-xs text-muted">Task: {p.task?.title || p.task?.id}</div>
+                          <div className="text-xs text-muted">Invited by: {p.invitedBy?.name || p.invitedBy?.email}</div>
+                        </div>
+                        <div className="flex gap-2">
+                          <button className="px-2 py-1 text-sm border border-border rounded-md" onClick={() => resend(p.id)}>
+                            Resend
+                          </button>
+                          <button className="px-2 py-1 text-sm text-destructive border border-border rounded-md" onClick={() => cancel(p.id)}>
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
         </div>
       </main>
 
-      {/* Add Task Modal */}
-      {showModal && (
+      {/* Add Task Modal (admin only) */}
+      {role === "admin" && showModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
           <Card className="w-full max-w-md">
             <CardHeader>

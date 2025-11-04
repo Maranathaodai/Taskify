@@ -4,7 +4,7 @@
 @custom-variant dark (&:is(.dark *));
 
 :root {
-  /* Changed root colors to dark mode as default */
+
   --background: #0f172a;
   --foreground: #f1f5f9;
   --card: #1e293b;

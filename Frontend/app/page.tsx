@@ -10,10 +10,11 @@ export default function Home() {
   // the dashboard. Logging out clears storage and returns to the auth UI.
   const [authenticated, setAuthenticated] = useState(false)
 
-  useEffect(() => {
-    const token = localStorage.getItem("authToken")
-    setAuthenticated(!!token)
-  }, [])
+  // NOTE: we intentionally do NOT auto-check localStorage for an auth
+  // token on mount. The user requested that sign-in must be manual for
+  // testing purposes — they should click the Sign In button to
+  // transition to the dashboard. Leaving this effect in place would
+  // cause the app to auto-login if a token exists from a previous run.
 
   const handleAuthSuccess = () => {
     // AuthPage already writes the token to localStorage; reflect that here.

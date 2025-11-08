@@ -52,6 +52,13 @@ export const typeDefs = /* GraphQL */ `#graphql
     pendingAssignments: [PendingAssignment!]!
   }
 
+  type Subscription {
+    taskCreated: Task!
+    taskUpdated: Task!
+    taskDeleted: ID!
+    pendingAssignmentCreated: PendingAssignment!
+  }
+
   type Mutation {
     register(name: String!, email: String!, password: String!): AuthPayload!
     login(email: String!, password: String!): AuthPayload!

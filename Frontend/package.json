@@ -9,6 +9,8 @@
     "start": "next start"
   },
   "dependencies": {
+  "@tanstack/react-query": "^5.0.0",
+  "@tanstack/react-query-devtools": "^5.0.0",
     "@apollo/client": "^4.0.9",
     "autoprefixer": "^10.4.20",
     "clsx": "^2.1.1",
@@ -22,6 +24,7 @@
     "tailwindcss-animate": "^1.0.7"
   },
   "devDependencies": {
+    "graphql-ws": "^6.0.0",
     "@tailwindcss/postcss": "^4.1.9",
     "@types/node": "^22",
     "@types/react": "^19",

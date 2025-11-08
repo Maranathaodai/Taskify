@@ -3,6 +3,7 @@ import jwt from 'jsonwebtoken'
 import { UserModel } from '../models/User'
 import { TaskModel } from '../models/Task'
 import { PendingAssignmentModel } from '../models/PendingAssignment'
+import { pubsub, EVENTS } from '../utils/pubsub'
 import type { GraphQLContext } from '../middleware/context'
 import { Types } from 'mongoose'
 
@@ -70,9 +71,9 @@ export const resolvers = {
     },
     login: async (_: unknown, args: { email: string; password: string }) => {
       const user = await UserModel.findOne({ email: args.email })
-      if (!user) throw new Error('Invalid credentials')
+      if (!user) throw new Error('No account found for that email')
       const ok = await bcrypt.compare(args.password, user.passwordHash)
-      if (!ok) throw new Error('Invalid credentials')
+      if (!ok) throw new Error('Incorrect password')
       const token = signToken(user.id)
       return { token, user }
     },
@@ -83,6 +84,11 @@ export const resolvers = {
         description: args.description,
         createdBy: new Types.ObjectId(ctx.user!.id),
       })
+      try {
+        await pubsub.publish(EVENTS.TASK_CREATED, { taskCreated: task })
+      } catch (err) {
+        // non-fatal
+      }
       return task
     },
     updateTask: async (
@@ -112,6 +118,9 @@ export const resolvers = {
       }
 
       await task.save()
+      try {
+        await pubsub.publish(EVENTS.TASK_UPDATED, { taskUpdated: task })
+      } catch (err) {}
       return task
     },
     toggleTaskComplete: async (_: unknown, args: { id: string }, ctx: GraphQLContext) => {
@@ -125,6 +134,9 @@ export const resolvers = {
       }
       task.completed = !task.completed
       await task.save()
+      try {
+        await pubsub.publish(EVENTS.TASK_UPDATED, { taskUpdated: task })
+      } catch (err) {}
       return task
     },
     deleteTask: async (_: unknown, args: { id: string }, ctx: GraphQLContext) => {
@@ -135,6 +147,9 @@ export const resolvers = {
         throw new Error('Forbidden')
       }
       const res = await TaskModel.deleteOne({ _id: args.id })
+      try {
+        if (res.deletedCount === 1) await pubsub.publish(EVENTS.TASK_DELETED, { taskDeleted: args.id })
+      } catch (err) {}
       return res.deletedCount === 1
     },
     assignTask: async (_: unknown, args: { id: string; userId?: string }, ctx: GraphQLContext) => {
@@ -146,6 +161,9 @@ export const resolvers = {
       }
       task.assignedTo = args.userId ? new Types.ObjectId(args.userId) : undefined
       await task.save()
+      try {
+        await pubsub.publish(EVENTS.TASK_UPDATED, { taskUpdated: task })
+      } catch (err) {}
       return task
     },
     assignTaskByEmail: async (_: unknown, args: { id: string; email: string }, ctx: GraphQLContext) => {
@@ -165,7 +183,10 @@ export const resolvers = {
       }
 
       // Create a pending assignment if the user does not exist yet
-      await PendingAssignmentModel.create({ email: args.email, task: task._id, invitedBy: new Types.ObjectId(ctx.user!.id) })
+      const p = await PendingAssignmentModel.create({ email: args.email, task: task._id, invitedBy: new Types.ObjectId(ctx.user!.id) })
+      try {
+        await pubsub.publish(EVENTS.PENDING_CREATED, { pendingAssignmentCreated: p })
+      } catch (err) {}
       // Return the task as-is (unassigned) so the client can show pending state
       return task
     },
@@ -198,6 +219,20 @@ export const resolvers = {
     id: (t: any) => t.id || t._id,
     createdBy: async (t: any) => UserModel.findById(t.createdBy),
     assignedTo: async (t: any) => (t.assignedTo ? UserModel.findById(t.assignedTo) : null),
+  },
+  Subscription: {
+    taskCreated: {
+      subscribe: () => pubsub.asyncIterator([EVENTS.TASK_CREATED]),
+    },
+    taskUpdated: {
+      subscribe: () => pubsub.asyncIterator([EVENTS.TASK_UPDATED]),
+    },
+    taskDeleted: {
+      subscribe: () => pubsub.asyncIterator([EVENTS.TASK_DELETED]),
+    },
+    pendingAssignmentCreated: {
+      subscribe: () => pubsub.asyncIterator([EVENTS.PENDING_CREATED]),
+    },
   },
 }
 

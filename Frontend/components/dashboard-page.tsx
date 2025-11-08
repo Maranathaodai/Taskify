@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useMemo } from "react"
+import { useState, useEffect, useMemo, useRef } from "react"
 import { Button } from "@/components/button"
 import { Input } from "@/components/input"
 import { Card, CardHeader, CardContent, CardTitle } from "@/components/card"
@@ -10,6 +10,10 @@ import { useTasks } from "@/lib/hooks/useTasks"
 import { useUsers } from "@/lib/hooks/useUsers"
 import { UserPicker } from "@/components/user-picker"
 import { usePendingAssignments } from "@/lib/hooks/usePendingAssignments"
+import { useCreateTask } from "@/lib/hooks/useCreateTask"
+import { useToggleTaskComplete } from "@/lib/hooks/useToggleTaskComplete"
+import { useDeleteTask } from "@/lib/hooks/useDeleteTask"
+import { useUpdateTask } from "@/lib/hooks/useUpdateTask"
 
 interface Task {
   id: string
@@ -48,20 +52,32 @@ export function DashboardPage({ onLogout, role = "admin" }: DashboardPageProps) 
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([])
   const [newMemberName, setNewMemberName] = useState("")
   const [newMemberEmail, setNewMemberEmail] = useState("")
+  const { update } = useUpdateTask()
+  const { createTask } = useCreateTask()
+  const [editTaskId, setEditTaskId] = useState<string | null>(null)
+  const [editTaskTitle, setEditTaskTitle] = useState("")
 
   const taskFilter = useMemo(() => (role === "admin" ? { mine: false } : { mine: true }), [role])
   const { tasks: remoteTasks, loading: tasksLoading, refetch: refetchTasks } = useTasks(taskFilter)
   const { users: backendUsers, loading: usersLoading } = useUsers()
 
+  
+  const prevRemoteIdsRef = useRef<string | null>(null)
+  const prevMembersKeyRef = useRef<string | null>(null)
+  const savedTasksLoadedRef = useRef(false)
+  const prevScrollRef = useRef<number>(0)
+
+  
   useEffect(() => {
     const name = localStorage.getItem("userName") || "User"
     const id = localStorage.getItem("userId") || localStorage.getItem("userEmail") || ""
     setUserName(name)
     setUserId(id)
+  }, [])
 
-    // If backend returned tasks (we're authenticated), use them. Otherwise fall back to localStorage.
+  useEffect(() => {
     if (remoteTasks && remoteTasks.length > 0) {
-      const mapped = remoteTasks.map((t: any) => ({
+      const mapped: Task[] = remoteTasks.map((t: any) => ({
         id: t.id,
         title: t.title,
         completed: t.completed,
@@ -70,10 +86,17 @@ export function DashboardPage({ onLogout, role = "admin" }: DashboardPageProps) 
         createdBy: t.createdBy?.id,
         userId: t.createdBy?.id ?? "",
       }))
-      setTasks(mapped)
+      const ids = mapped.map((m) => m.id).join(",")
+      if (prevRemoteIdsRef.current !== ids) {
+        prevRemoteIdsRef.current = ids
+        setTasks(mapped)
+      }
     } else {
+      // Only load saved tasks once if we don't have remote tasks
       const savedTasks = localStorage.getItem("tasks")
-      if (savedTasks) {
+      if (savedTasks && !savedTasksLoadedRef.current) {
+        savedTasksLoadedRef.current = true
+        const id = localStorage.getItem("userId") || localStorage.getItem("userEmail") || ""
         setTasks(
           JSON.parse(savedTasks).map((t: any) => ({
             ...t,
@@ -83,12 +106,19 @@ export function DashboardPage({ onLogout, role = "admin" }: DashboardPageProps) 
         )
       }
     }
+  }, [remoteTasks])
 
-    // Load team members: prefer backend users for admins, otherwise local storage
+  // Sync team members separately to avoid coupling with tasks and to minimize writes
+  useEffect(() => {
+    const id = localStorage.getItem("userId") || localStorage.getItem("userEmail") || ""
     if (role === "admin" && backendUsers && backendUsers.length > 0) {
-      const members = backendUsers.map((u: any) => ({ id: u.id, name: u.name, email: u.email }))
-      setTeamMembers(members)
-      localStorage.setItem("teamMembers", JSON.stringify(members))
+      const members: TeamMember[] = backendUsers.map((u: any) => ({ id: u.id, name: u.name, email: u.email }))
+      const key = members.map((m) => m.id).join(",")
+      if (prevMembersKeyRef.current !== key) {
+        prevMembersKeyRef.current = key
+        setTeamMembers(members)
+        localStorage.setItem("teamMembers", JSON.stringify(members))
+      }
     } else {
       const savedMembers = localStorage.getItem("teamMembers")
       let members: TeamMember[] = []
@@ -96,19 +126,28 @@ export function DashboardPage({ onLogout, role = "admin" }: DashboardPageProps) 
         members = JSON.parse(savedMembers)
       }
       if (id && !members.find((m) => m.id === id)) {
-        members.push({ id, name, email: localStorage.getItem("userEmail") || id })
+        members.push({ id, name: localStorage.getItem("userName") || "User", email: localStorage.getItem("userEmail") || id })
       }
-      setTeamMembers(members)
-      localStorage.setItem("teamMembers", JSON.stringify(members))
+      const key = members.map((m) => m.id).join(",")
+      if (prevMembersKeyRef.current !== key) {
+        prevMembersKeyRef.current = key
+        setTeamMembers(members)
+        localStorage.setItem("teamMembers", JSON.stringify(members))
+      }
     }
-  }, [remoteTasks, backendUsers])
+  }, [backendUsers, role])
 
   useEffect(() => {
     const handleScroll = () => {
-      setScrollY(window.scrollY)
-      setStatsVisible(window.scrollY > 100)
+      const y = window.scrollY
+      // Only update when the value changed to avoid excessive re-renders
+      if (y !== prevScrollRef.current) {
+        prevScrollRef.current = y
+        setScrollY(y)
+        setStatsVisible(y > 100)
+      }
     }
-    window.addEventListener("scroll", handleScroll)
+    window.addEventListener("scroll", handleScroll, { passive: true })
     return () => window.removeEventListener("scroll", handleScroll)
   }, [])
 
@@ -123,7 +162,41 @@ export function DashboardPage({ onLogout, role = "admin" }: DashboardPageProps) 
   }
 
   const addTask = () => {
-    if (newTaskTitle.trim()) {
+    if (!newTaskTitle.trim()) return
+
+    const token = typeof window !== "undefined" ? localStorage.getItem("authToken") : null
+    if (token) {
+      // Persist to backend and use server id so assignment works
+      createTask(newTaskTitle)
+        .then((t: any) => {
+          const mapped: Task = {
+            id: t.id,
+            title: t.title,
+            completed: t.completed,
+            createdAt: new Date(t.createdAt),
+            assignedTo: t.assignedTo?.id,
+            createdBy: t.createdBy?.id,
+            userId: t.createdBy?.id ?? userId,
+          }
+          saveTasks([mapped, ...tasks])
+          setNewTaskTitle("")
+          setShowModal(false)
+        })
+        .catch((err: any) => {
+          // fallback to local task if backend fails
+          console.error('createTask failed', err)
+          const newTask: Task = {
+            id: Date.now().toString(),
+            title: newTaskTitle,
+            completed: false,
+            createdAt: new Date(),
+            userId: userId,
+          }
+          saveTasks([newTask, ...tasks])
+          setNewTaskTitle("")
+          setShowModal(false)
+        })
+    } else {
       const newTask: Task = {
         id: Date.now().toString(),
         title: newTaskTitle,
@@ -137,8 +210,43 @@ export function DashboardPage({ onLogout, role = "admin" }: DashboardPageProps) 
     }
   }
 
+  const saveEdit = () => {
+    if (!editTaskId) return
+    const token = typeof window !== "undefined" ? localStorage.getItem("authToken") : null
+    if (token) {
+      update(editTaskId, editTaskTitle)
+        .then((res: any) => {
+          saveTasks(tasks.map((t) => (t.id === res.id ? { ...t, title: res.title } : t)))
+          setEditTaskId(null)
+          setEditTaskTitle("")
+        })
+        .catch((err: any) => {
+          console.error('updateTask failed', err)
+        })
+    } else {
+      saveTasks(tasks.map((t) => (t.id === editTaskId ? { ...t, title: editTaskTitle } : t)))
+      setEditTaskId(null)
+      setEditTaskTitle("")
+    }
+  }
+
+  const { toggle } = useToggleTaskComplete()
+  const { del } = useDeleteTask()
+
   const toggleTask = (id: string) => {
-    saveTasks(tasks.map((t) => (t.id === id ? { ...t, completed: !t.completed } : t)))
+    const token = typeof window !== "undefined" ? localStorage.getItem("authToken") : null
+    // If authenticated, attempt to toggle on backend (backend enforces permission).
+    if (token) {
+      toggle(id)
+        .then((res: any) => {
+          saveTasks(tasks.map((t) => (t.id === id ? { ...t, completed: res.completed } : t)))
+        })
+        .catch((err: any) => {
+          console.error('toggleTask failed', err)
+        })
+    } else {
+      saveTasks(tasks.map((t) => (t.id === id ? { ...t, completed: !t.completed } : t)))
+    }
   }
 
   const updateTaskStatus = (id: string, completed: boolean) => {
@@ -168,9 +276,10 @@ export function DashboardPage({ onLogout, role = "admin" }: DashboardPageProps) 
   })
 
   const myTasks = tasks.filter((t: any) => t.assignedTo === userId)
-  const completedCount = tasks.filter((t) => t.completed).length
-  const activeCount = tasks.filter((t) => !t.completed).length
-  const myTasksCount = myTasks.filter((t) => !t.completed).length
+  // Use `visible` (already role-scoped) for dashboard stats so members only see counts for their tasks
+  const completedCount = visible.filter((t: any) => t.completed).length
+  const activeCount = visible.filter((t: any) => !t.completed).length
+  const myTasksCount = myTasks.filter((t: any) => !t.completed).length
   const { pending: pendingAssignments, loading: pendingLoading, resend, cancel } = usePendingAssignments()
 
   return (
@@ -187,7 +296,7 @@ export function DashboardPage({ onLogout, role = "admin" }: DashboardPageProps) 
             <div className="hidden md:flex items-center gap-6 transition-all duration-300 opacity-100">
               <div className="text-center">
                 <p className="text-xs text-muted uppercase tracking-wide">Total</p>
-                <p className="text-lg font-semibold">{tasks.length}</p>
+                <p className="text-lg font-semibold">{visible.length}</p>
               </div>
               <div className="text-center">
                 <p className="text-xs text-muted uppercase tracking-wide">Completed</p>
@@ -225,7 +334,7 @@ export function DashboardPage({ onLogout, role = "admin" }: DashboardPageProps) 
               <CardContent className="pt-6">
                 <div className="space-y-2">
                   <p className="text-sm text-muted">Total Tasks</p>
-                  <p className="text-3xl font-semibold">{tasks.length}</p>
+                  <p className="text-3xl font-semibold">{visible.length}</p>
                 </div>
               </CardContent>
             </Card>
@@ -298,9 +407,20 @@ export function DashboardPage({ onLogout, role = "admin" }: DashboardPageProps) 
               {/* Task List */}
               <div className="space-y-2">
                 {filteredTasks.length === 0 ? (
-                  <p className="text-center text-muted py-8">
-                    {tasks.length === 0 ? "No tasks yet. Create one to get started!" : "No tasks in this filter."}
-                  </p>
+                  <div className="text-center text-muted py-8">
+                    {visible.length === 0 ? (
+                      role === "member" ? (
+                        <div className="space-y-2">
+                          <p className="text-lg">No task yet!</p>
+                          <p className="text-sm">Admin will send tasks your way soon.</p>
+                        </div>
+                      ) : (
+                        "No tasks yet. Create one to get started!"
+                      )
+                    ) : (
+                      "No tasks in this filter."
+                    )}
+                  </div>
                 ) : (
                   filteredTasks.map((task: any) => (
                     <div
@@ -315,8 +435,11 @@ export function DashboardPage({ onLogout, role = "admin" }: DashboardPageProps) 
                         )}
                       </button>
                       <div className="flex-1">
-                        <div className={`${task.completed ? "line-through text-muted" : "text-foreground"}`}>
-                          {task.title}
+                        <div className="flex items-center gap-2">
+                          <div className={`${task.completed ? "line-through text-muted" : "text-foreground"}`}>
+                            {task.title}
+                          </div>
+                          {/* removed unsaved badge */}
                         </div>
                         <div className="mt-1 text-xs text-muted flex items-center gap-2">
                           <UserIcon className="w-3.5 h-3.5" />
@@ -368,18 +491,26 @@ export function DashboardPage({ onLogout, role = "admin" }: DashboardPageProps) 
                           <>
                             {/* Assign Dropdown */}
                             <div className="relative">
-                              <button
-                                onClick={() => setAssignDropdownOpen(assignDropdownOpen === task.id ? null : task.id)}
-                                className="flex items-center gap-1 px-3 py-1.5 text-sm rounded-md border border-border hover:bg-background transition-colors"
-                                title="Assign"
-                              >
-                                <span className="text-xs">Assign</span>
-                                <ChevronDown className="w-4 h-4" />
-                              </button>
+                              {(() => {
+                                const isRemote = /^[0-9a-fA-F]{24}$/.test(task.id)
+                                return (
+                                  <button
+                                    onClick={() => isRemote && setAssignDropdownOpen(assignDropdownOpen === task.id ? null : task.id)}
+                                    className={`flex items-center gap-1 px-3 py-1.5 text-sm rounded-md border border-border transition-colors ${
+                                      isRemote ? 'hover:bg-background' : 'opacity-60 cursor-not-allowed'
+                                    }`}
+                                    title={isRemote ? 'Assign' : 'Save task to server to enable assigning'}
+                                    disabled={!isRemote}
+                                  >
+                                    <span className="text-xs">Assign</span>
+                                    <ChevronDown className="w-4 h-4" />
+                                  </button>
+                                )
+                              })()}
                               {assignDropdownOpen === task.id && (
                                 <>
                                   <div className="fixed inset-0 z-10" onClick={() => setAssignDropdownOpen(null)} />
-                                  <div className="absolute right-0 mt-1 w-44 bg-card border border-border rounded-md shadow-lg z-20 max-h-60 overflow-auto">
+                                  <div className="absolute right-0 mt-1 min-w-[320px] bg-card border border-border rounded-md shadow-lg z-20">
                                     {/* Use the backend-powered UserPicker (falls back to local members if backend not available) */}
                                     <UserPicker
                                       taskId={task.id}
@@ -396,11 +527,35 @@ export function DashboardPage({ onLogout, role = "admin" }: DashboardPageProps) 
                               )}
                             </div>
                             <button
-                              onClick={() => deleteTask(task.id)}
-                              className="flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity p-1.5 hover:bg-destructive/10 rounded-md"
+                              onClick={() => {
+                                const token = typeof window !== "undefined" ? localStorage.getItem("authToken") : null
+                                if (token) {
+                                  del(task.id)
+                                    .then((ok: boolean) => {
+                                      if (ok) saveTasks(tasks.filter((t) => t.id !== task.id))
+                                    })
+                                    .catch((err: any) => console.error('deleteTask failed', err))
+                                } else {
+                                  deleteTask(task.id)
+                                }
+                              }}
+                              className="flex-shrink-0 p-1.5 hover:bg-destructive/10 rounded-md transition-colors"
                               title="Delete task"
                             >
                               <Trash2 className="w-4 h-4 text-muted hover:text-destructive" />
+                            </button>
+                            <button
+                              onClick={() => {
+                                setEditTaskId(task.id)
+                                setEditTaskTitle(task.title)
+                              }}
+                              className="flex-shrink-0 p-1.5 hover:bg-background rounded-md transition-colors"
+                              title="Edit task"
+                            >
+                              <svg className="w-4 h-4 text-muted" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                                <path d="M20.71 7.04a1.003 1.003 0 0 0 0-1.42l-2.34-2.34a1.003 1.003 0 0 0-1.42 0l-1.83 1.83 3.75 3.75 1.84-1.82z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                              </svg>
                             </button>
                           </>
                         )}
@@ -463,7 +618,7 @@ export function DashboardPage({ onLogout, role = "admin" }: DashboardPageProps) 
                     Add Member
                   </Button>
                 </div>
-                <p className="text-xs text-muted">Tip: members are stored locally for now. Backend integration will replace this.</p>
+                
               </div>
               </CardContent>
             </Card>
@@ -528,6 +683,37 @@ export function DashboardPage({ onLogout, role = "admin" }: DashboardPageProps) 
                 </Button>
                 <Button variant="primary" onClick={addTask}>
                   Create Task
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* Edit Task Modal (admin only) */}
+      {role === "admin" && editTaskId && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <Card className="w-full max-w-md">
+            <CardHeader>
+              <CardTitle>Edit Task</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <Input
+                placeholder="Enter task title..."
+                value={editTaskTitle}
+                onChange={(e) => setEditTaskTitle(e.target.value)}
+                onKeyPress={(e) => e.key === "Enter" && saveEdit()}
+                autoFocus
+              />
+              <div className="flex gap-3 justify-end">
+                <Button variant="outline" onClick={() => setEditTaskId(null)}>
+                  Cancel
+                </Button>
+                <Button
+                  variant="primary"
+                  onClick={() => saveEdit()}
+                >
+                  Save
                 </Button>
               </div>
             </CardContent>

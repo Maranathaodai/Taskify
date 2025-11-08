@@ -40,6 +40,7 @@
   --sidebar-ring: oklch(0.439 0 0);
 }
 
+html.light,
 .light {
   /* Light mode colors now in .light class for opting into light mode */
   --background: #ffffff;

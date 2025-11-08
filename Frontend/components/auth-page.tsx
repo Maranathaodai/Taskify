@@ -7,7 +7,7 @@ import { Button } from "@/components/button"
 import { Input } from "@/components/input"
 import { Card, CardHeader, CardContent, CardTitle, CardDescription } from "@/components/card"
 import { useTheme } from "@/components/theme-provider"
-import { Moon, Sun } from "lucide-react"
+import { Moon, Sun, Eye, EyeOff } from "lucide-react"
 import { useAuth } from "@/lib/hooks/useAuth"
 
 interface AuthPageProps {
@@ -22,6 +22,7 @@ export function AuthPage({ onAuthSuccess }: AuthPageProps) {
   const [name, setName] = useState("")
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string>("")
+  const [success, setSuccess] = useState<string>("")
   // No visible role switcher; we infer role in the background
   const { theme, toggleTheme } = useTheme()
 
@@ -33,52 +34,49 @@ export function AuthPage({ onAuthSuccess }: AuthPageProps) {
     setError("")
 
     try {
-      let response
       if (isLogin) {
-        response = await login(email, password)
+        const response = await login(email, password)
+        const user = response as any
+        const serverRole = user?.role
+        let inferredRole: "admin" | "member"
+        if (serverRole) {
+          inferredRole = serverRole === "ADMIN" ? "admin" : "member"
+        } else {
+          const existingAdmin = localStorage.getItem("adminEmail")
+          inferredRole = existingAdmin ? (user.email === existingAdmin ? "admin" : "member") : "admin"
+          if (!existingAdmin) localStorage.setItem("adminEmail", user.email)
+        }
+        localStorage.setItem("userRole", inferredRole)
+
+        // ensure other user fields are present for older flows
+        try {
+          localStorage.setItem("userId", user.id)
+          localStorage.setItem("userEmail", user.email)
+          localStorage.setItem("userName", user.name)
+        } catch {}
+
+        onAuthSuccess()
       } else {
+        // Sign up flow: create account but do NOT auto-login. Show success and return to login form.
         if (!name.trim()) {
           setError("Name is required")
           setLoading(false)
           return
         }
-        response = await register(name, email, password)
+        await register(name, email, password)
+        setSuccess("Account created successfully. Please sign in.")
+        setIsLogin(true)
+        setPassword("")
+        // keep the email filled to make signing in easier
+        setLoading(false)
+        return
       }
-
-      // response is the user object returned by useAuth.login/register
-      const user = response as any
-      // Use server-provided role when available. Fallback to previous inference behavior for older/mocked flows.
-      const serverRole = user?.role
-      let inferredRole: "admin" | "member"
-      if (serverRole) {
-        inferredRole = serverRole === "ADMIN" ? "admin" : "member"
-      } else {
-        const existingAdmin = localStorage.getItem("adminEmail")
-        inferredRole = existingAdmin ? (user.email === existingAdmin ? "admin" : "member") : "admin"
-        if (!existingAdmin) localStorage.setItem("adminEmail", user.email)
-      }
-      localStorage.setItem("userRole", inferredRole)
-
-      // ensure other user fields are present for older flows
-      try {
-        localStorage.setItem("userId", user.id)
-        localStorage.setItem("userEmail", user.email)
-        localStorage.setItem("userName", user.name)
-      } catch {}
-
-      onAuthSuccess()
     } catch (err) {
-      // Fallback: accept any credentials locally so you can test the flow
-      const fallbackName = isLogin ? (localStorage.getItem("userName") || "User") : (name || "User")
-      localStorage.setItem("authToken", "mock-token-" + Date.now())
-      localStorage.setItem("userId", email || "local-user")
-      localStorage.setItem("userEmail", email || "local@example.com")
-      localStorage.setItem("userName", fallbackName)
-      const existingAdmin2 = localStorage.getItem("adminEmail")
-      const inferredRole2 = existingAdmin2 ? ((email || "") === existingAdmin2 ? "admin" : "member") : "admin"
-      if (!existingAdmin2 && email) localStorage.setItem("adminEmail", email)
-      localStorage.setItem("userRole", inferredRole2)
-      onAuthSuccess()
+      // Show server-provided error message when available
+  const e: any = err
+  const message = e?.graphQLErrors?.[0]?.message || e?.message || "Authentication failed"
+      setError(message)
+      setLoading(false)
       return
     }
   }
@@ -137,16 +135,40 @@ export function AuthPage({ onAuthSuccess }: AuthPageProps) {
               <button
                 type="button"
                 onClick={() => setShowPassword((s) => !s)}
-                className="absolute right-2 top-8 p-1 text-muted"
+                className="absolute right-3 top-8 p-1.5 text-muted-foreground hover:text-foreground transition-colors rounded-md hover:bg-background"
                 aria-label={showPassword ? "Hide password" : "Show password"}
               >
-                {showPassword ? <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.875 18.825A10.05 10.05 0 0112 19c-5.523 0-10-4.477-10-10 0-1.06.165-2.082.475-3.041M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg> : <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>}
+                {showPassword ? (
+                  <EyeOff className="h-4 w-4" />
+                ) : (
+                  <Eye className="h-4 w-4" />
+                )}
               </button>
             </div>
 
             {error && (
               <div className="p-3 rounded-md bg-destructive/10 border border-destructive/20">
                 <p className="text-sm text-destructive">{error}</p>
+              </div>
+            )}
+
+            {success && (
+              <div className="p-3 rounded-md bg-success/10 border border-success/20">
+                <p className="text-sm text-success">{success}</p>
+              </div>
+            )}
+
+            {/* If backend reports no account, offer a quick create-account CTA */}
+            {error === 'No account found for that email' && (
+              <div className="mt-3 text-sm text-muted">
+                <p>No account with these details was found.</p>
+                <button
+                  type="button"
+                  onClick={() => setIsLogin(false)}
+                  className="text-accent dark:text-dark-accent font-medium hover:underline mt-1"
+                >
+                  Create an account
+                </button>
               </div>
             )}
 

@@ -1,43 +1,60 @@
 "use client"
 
-import { useEffect, useState, useCallback } from "react"
+import { gql } from "@apollo/client"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { apolloClient } from "@/lib/apollo/client"
+import { useEffect } from "react"
 
-const GRAPHQL_URL = typeof window !== "undefined" && (process.env.NEXT_PUBLIC_GRAPHQL_URL || "http://localhost:4000/graphql")
+const TASKS_QUERY = gql`
+  query Tasks($filter: TaskFilter) {
+    tasks(filter: $filter) {
+      id
+      title
+      description
+      completed
+      createdAt
+      updatedAt
+      createdBy { id name email }
+      assignedTo { id name email }
+    }
+  }
+`
 
 export function useTasks(filter?: { mine?: boolean; completed?: boolean }) {
-  const [tasks, setTasks] = useState<any[]>([])
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<any>(null)
+  const key = ["tasks", filter ?? { mine: true }]
 
-  const fetchTasks = useCallback(async (vars?: any) => {
-    if (!GRAPHQL_URL) return
-    setLoading(true)
-    setError(null)
-    try {
-      const query = `query Tasks($filter: TaskFilter) { tasks(filter: $filter) { id title description completed createdAt updatedAt createdBy { id name email } assignedTo { id name email } } }`
-      // Default to fetching only tasks belonging to the current user unless
-      // an explicit filter is provided. This prevents showing all tasks to any
-      // authenticated user.
-      const effectiveFilter = typeof vars !== "undefined" ? vars : (filter ?? { mine: true })
+  const query = useQuery({
+    queryKey: key,
+    queryFn: async () => {
+      const vars = { filter: typeof filter !== 'undefined' ? filter : { mine: true } }
+      const res = await apolloClient.query({ query: TASKS_QUERY, variables: vars, fetchPolicy: 'network-only' })
+      const data = (res as any).data
+      return data?.tasks || []
+    },
+    staleTime: 1000 * 30,
+  })
 
-      const res = await fetch(GRAPHQL_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query, variables: { filter: effectiveFilter } }),
-      })
-      const json = await res.json()
-      if (json.errors) throw new Error(json.errors[0]?.message || "GraphQL error")
-      setTasks(json.data.tasks || [])
-    } catch (err) {
-      setError(err)
-    } finally {
-      setLoading(false)
-    }
-  }, [filter])
-
+  
+  const qc = useQueryClient()
   useEffect(() => {
-    fetchTasks()
-  }, [fetchTasks])
+    let sub: any
+    try {
+      const createdSub = apolloClient.subscribe({ query: gql`subscription { taskCreated { id } }` })
+      const updatedSub = apolloClient.subscribe({ query: gql`subscription { taskUpdated { id } }` })
+      const deletedSub = apolloClient.subscribe({ query: gql`subscription { taskDeleted }` })
+  sub = createdSub.subscribe({ next: () => qc.invalidateQueries({ queryKey: key }) })
+      // also listen for updated and deleted
+  const sub2 = updatedSub.subscribe({ next: () => qc.invalidateQueries({ queryKey: key }) })
+  const sub3 = deletedSub.subscribe({ next: () => qc.invalidateQueries({ queryKey: key }) })
+      return () => {
+        sub.unsubscribe && sub.unsubscribe()
+        sub2.unsubscribe && sub2.unsubscribe()
+        sub3.unsubscribe && sub3.unsubscribe()
+      }
+    } catch (err) {
+      return () => {}
+    }
+  }, [qc, JSON.stringify(filter)])
 
-  return { tasks, loading, error, refetch: fetchTasks }
+  return { tasks: query.data || [], loading: query.isLoading, error: query.error, refetch: query.refetch }
 }

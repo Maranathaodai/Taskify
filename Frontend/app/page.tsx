@@ -26,12 +26,29 @@ export default function Home() {
     localStorage.removeItem("userId")
     localStorage.removeItem("userEmail")
     localStorage.removeItem("userName")
+    // Keep adminEmail as a persistent marker for the original admin account.
+    // Removing it on logout caused the next user to become the admin.
     localStorage.removeItem("userRole")
-    localStorage.removeItem("adminEmail")
     setAuthenticated(false)
   }
 
-  const role = (typeof window !== 'undefined' ? (localStorage.getItem("userRole") as "admin" | "member" | null) : null) || "admin"
+  // Derive role safely from localStorage. If userRole is explicitly set, use it.
+  // Otherwise fall back to checking the preserved adminEmail marker; if the
+  // current user email matches adminEmail they're the admin, else default to
+  // member. Defaulting to "member" avoids accidentally showing admin UI when
+  // userRole is missing.
+  let role: "admin" | "member" = "member"
+  if (typeof window !== 'undefined') {
+    const stored = localStorage.getItem("userRole")
+    if (stored === "admin" || stored === "member") {
+      role = stored as "admin" | "member"
+    } else {
+      const adminEmail = localStorage.getItem("adminEmail")
+      const userEmail = localStorage.getItem("userEmail")
+      if (adminEmail && userEmail && adminEmail === userEmail) role = "admin"
+      else role = "member"
+    }
+  }
 
   return authenticated ? (
     <DashboardPage onLogout={handleLogout} role={role} />

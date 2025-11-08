@@ -26,14 +26,7 @@ Frontend (what's implemented)
 - Pages and components for auth UI, dashboard, and task UI.
 - Frontend currently wired to use the GraphQL backend or local mock API depending on development needs.
 
-What's remaining / planned
-- Optional: GraphQL Subscriptions for real-time updates (not implemented yet).
-- Dockerization and docker-compose for local dev.
-- Vitest tests for backend resolvers and auth flow.
-- Seed script to create sample data / admin user.
-- Frontend: add reusable Apollo hooks and optimistic UI flows.
 
----
 
 ## Backend — get started locally
 
@@ -171,20 +164,7 @@ By default the Next app serves locally (e.g. http://localhost:3000). The fronten
 
 ## Notes, security, and recommendations
 - The repo contains an `.env.example` in `Backend/`. Ensure you do not commit real secrets — add `.env` to `.gitignore` in your project root if not already ignored.
-- Current authorization model allows any authenticated user to call `assignTask`. If you want stricter rules (e.g., only the task creator or ADMIN may assign/unassign), I can implement role-based checks quickly.
 - Subscriptions (task updates in real time) are a planned enhancement. I recommend `graphql-ws` + an in-memory PubSub for development and Redis PubSub for production.
 
 ---
 
-## Next suggested steps I can implement for you
-- Add an in-memory `taskUpdated` subscription and publish events when tasks are created/updated/assigned.
-- Add `assignedBy`/`assignedAt` audit fields to the `Task` model and expose them in the schema.
-- Harden `assignTask` so only ADMIN or task creator can assign/unassign.
-- Add a seed script and Dockerfiles / docker-compose for quick local development.
-- Add Vitest tests and CI workflow.
-
-If you'd like me to create a short seed script and a `README`-level GraphQL examples file inside `Backend/` next, tell me and I will add it.
-
----
-
-If you want this committed and pushed, tell me and I will create the README file (done) and then I can walk you through the git commands to commit and push, or run them here if you want me to (confirm).

@@ -1,76 +1,82 @@
 "use client"
 
-import { useEffect, useState, useCallback } from "react"
+import { gql } from "@apollo/client"
+import { useQuery, useMutation } from "@tanstack/react-query"
+import { apolloClient } from "@/lib/apollo/client"
 
-const GRAPHQL_URL = typeof window !== "undefined" ? (process.env.NEXT_PUBLIC_GRAPHQL_URL || "http://localhost:4000/graphql") : ""
+const PENDING_QUERY = gql`
+  query PendingAssignments {
+    pendingAssignments {
+      id
+      email
+      task { id title }
+      invitedBy { id name email }
+      createdAt
+      updatedAt
+    }
+  }
+`
+
+const RESEND_MUTATION = gql`
+  mutation Resend($id: ID!) {
+    resendPendingAssignment(id: $id) {
+      id
+      email
+      task { id }
+      invitedBy { id name }
+      createdAt
+      updatedAt
+    }
+  }
+`
+
+const CANCEL_MUTATION = gql`
+  mutation Cancel($id: ID!) {
+    cancelPendingAssignment(id: $id)
+  }
+`
 
 export function usePendingAssignments() {
-  const [pending, setPending] = useState<any[]>([])
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<any>(null)
+  const key = ["pendingAssignments"]
 
-  const fetchPending = useCallback(async () => {
-    if (!GRAPHQL_URL) return
-    setLoading(true)
-    setError(null)
-    try {
+  const query = useQuery({
+    queryKey: key,
+    queryFn: async () => {
+      const res = await apolloClient.query({ query: PENDING_QUERY, fetchPolicy: "network-only" })
+      const data = (res as any).data
+      return data?.pendingAssignments || []
+    },
+    staleTime: 1000 * 30,
+  })
+
+  const resendMutation = useMutation({
+    mutationFn: async (id: string) => {
       const token = typeof window !== "undefined" ? localStorage.getItem("authToken") : null
-  const query = `query { pendingAssignments { id email task { id title } invitedBy { id name email } createdAt updatedAt } }`
-      const res = await fetch(GRAPHQL_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({ query }),
-      })
-      const json = await res.json()
-      if (json.errors) throw new Error(json.errors[0]?.message || "GraphQL error")
-      setPending(json.data.pendingAssignments || [])
-    } catch (err) {
-      setError(err)
-    } finally {
-      setLoading(false)
-    }
-  }, [])
+      const res = await apolloClient.mutate({ mutation: RESEND_MUTATION, variables: { id }, context: { headers: token ? { Authorization: `Bearer ${token}` } : {} } })
+      const data = (res as any).data
+      if (!res || !data) throw new Error("Resend failed")
+      return data.resendPendingAssignment
+    },
+    onSuccess: () => query.refetch(),
+  })
 
-  useEffect(() => {
-    fetchPending()
-  }, [fetchPending])
+  const cancelMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const token = typeof window !== "undefined" ? localStorage.getItem("authToken") : null
+      const res = await apolloClient.mutate({ mutation: CANCEL_MUTATION, variables: { id }, context: { headers: token ? { Authorization: `Bearer ${token}` } : {} } })
+      const data = (res as any).data
+      if (!res || !data) throw new Error("Cancel failed")
+      return data.cancelPendingAssignment
+    },
+    onSuccess: () => query.refetch(),
+  })
 
-  const resend = async (id: string) => {
-    const token = typeof window !== "undefined" ? localStorage.getItem("authToken") : null
-    const query = `mutation Resend($id: ID!) { resendPendingAssignment(id: $id) { id email task { id } invitedBy { id name } createdAt updatedAt } }`
-    const res = await fetch(GRAPHQL_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      body: JSON.stringify({ query, variables: { id } }),
-    })
-    const json = await res.json()
-    if (json.errors) throw new Error(json.errors[0]?.message || "GraphQL error")
-    await fetchPending()
-    return json.data.resendPendingAssignment
+  return {
+    pending: query.data || [],
+    loading: query.isLoading,
+    error: query.error,
+    refetch: query.refetch,
+    resend: (id: string) => resendMutation.mutateAsync(id),
+    cancel: (id: string) => cancelMutation.mutateAsync(id),
   }
-
-  const cancel = async (id: string) => {
-    const token = typeof window !== "undefined" ? localStorage.getItem("authToken") : null
-    const query = `mutation Cancel($id: ID!) { cancelPendingAssignment(id: $id) }`
-    const res = await fetch(GRAPHQL_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      body: JSON.stringify({ query, variables: { id } }),
-    })
-    const json = await res.json()
-    if (json.errors) throw new Error(json.errors[0]?.message || "GraphQL error")
-    await fetchPending()
-    return json.data.cancelPendingAssignment
-  }
-
-  return { pending, loading, error, refetch: fetchPending, resend, cancel }
 }

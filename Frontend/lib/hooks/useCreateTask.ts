@@ -1,38 +1,36 @@
 "use client"
 
-import { useState } from "react"
+import { gql } from "@apollo/client"
+import { useMutation } from "@tanstack/react-query"
+import { apolloClient } from "@/lib/apollo/client"
 
-const GRAPHQL_URL = typeof window !== "undefined" && (process.env.NEXT_PUBLIC_GRAPHQL_URL || "http://localhost:4000/graphql")
-
-export function useCreateTask() {
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<any>(null)
-
-  const createTask = async (title: string, description?: string) => {
-    if (!GRAPHQL_URL) throw new Error("GRAPHQL_URL not defined")
-    setLoading(true)
-    setError(null)
-    try {
-      const token = localStorage.getItem("authToken")
-      const query = `mutation CreateTask($title: String!, $description: String) { createTask(title: $title, description: $description) { id title description completed createdAt createdBy { id name } } }`
-      const res = await fetch(GRAPHQL_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({ query, variables: { title, description } }),
-      })
-      const json = await res.json()
-      if (json.errors) throw new Error(json.errors[0]?.message || "GraphQL error")
-      return json.data.createTask
-    } catch (err) {
-      setError(err)
-      throw err
-    } finally {
-      setLoading(false)
+const CREATE_TASK = gql`
+  mutation CreateTask($title: String!, $description: String) {
+    createTask(title: $title, description: $description) {
+      id
+      title
+      description
+      completed
+      createdAt
+      createdBy { id name email }
+      assignedTo { id name email }
     }
   }
+`
 
-  return { createTask, loading, error }
+export function useCreateTask() {
+  const mutation = useMutation({
+    mutationFn: async ({ title, description }: { title: string; description?: string }) => {
+      const token = typeof window !== "undefined" ? localStorage.getItem("authToken") : null
+      // Apollo client will attach headers via link if configured; we set auth header manually here
+      const res = await apolloClient.mutate({ mutation: CREATE_TASK, variables: { title, description }, context: { headers: token ? { Authorization: `Bearer ${token}` } : {} } })
+      const data = (res as any).data
+      if (!res || !data) throw new Error('Create task failed')
+      return data.createTask
+    }
+  })
+
+  const createTask = (title: string, description?: string) => mutation.mutateAsync({ title, description })
+
+  return { createTask, loading: mutation.isLoading, error: mutation.isError ? mutation.error : null }
 }

@@ -1,10 +1,22 @@
 "use client"
 
 import { useCallback, useState, useEffect } from "react"
-
-const GRAPHQL_URL = typeof window !== "undefined" && (process.env.NEXT_PUBLIC_GRAPHQL_URL || "http://localhost:4000/graphql")
+import { gql } from "@apollo/client"
+import { apolloClient } from "@/lib/apollo/client"
 
 type User = { id: string; name?: string; email?: string; role?: string }
+
+const LOGIN = gql`
+  mutation Login($email: String!, $password: String!) {
+    login(email: $email, password: $password) { token user { id name email role } }
+  }
+`
+
+const REGISTER = gql`
+  mutation Register($name: String!, $email: String!, $password: String!) {
+    register(name: $name, email: $email, password: $password) { token user { id name email role } }
+  }
+`
 
 export function useAuth() {
   const [user, setUser] = useState<User | null>(null)
@@ -22,42 +34,36 @@ export function useAuth() {
     try {
       localStorage.setItem("authToken", token)
       localStorage.setItem("user", JSON.stringify(userObj))
+      // store normalized role for UI checks (lowercase)
+      if (userObj && userObj.role) localStorage.setItem("userRole", String(userObj.role).toLowerCase())
     } catch {}
     setUser(userObj)
   }, [])
 
-  const callGQL = useCallback(async (query: string, variables: any) => {
-    if (!GRAPHQL_URL) throw new Error("GRAPHQL_URL not defined")
-    const res = await fetch(GRAPHQL_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query, variables }),
-    })
-    const json = await res.json()
-    if (json.errors) throw new Error(json.errors[0]?.message || "GraphQL error")
-    return json.data
-  }, [])
-
   const login = useCallback(async (email: string, password: string) => {
-    const query = `mutation Login($email: String!, $password: String!) { login(email: $email, password: $password) { token user { id name email role } } }`
-    const data = await callGQL(query, { email, password })
-    const payload = data.login
+    const res = await apolloClient.mutate({ mutation: LOGIN, variables: { email, password } })
+    const payload = (res as any).data?.login
+    if (!payload) throw new Error('Login failed')
     save(payload.token, payload.user)
     return payload.user as User
-  }, [callGQL, save])
+  }, [save])
 
   const register = useCallback(async (name: string, email: string, password: string) => {
-    const query = `mutation Register($name: String!, $email: String!, $password: String!) { register(name: $name, email: $email, password: $password) { token user { id name email role } } }`
-    const data = await callGQL(query, { name, email, password })
-    const payload = data.register
-    save(payload.token, payload.user)
+    const res = await apolloClient.mutate({ mutation: REGISTER, variables: { name, email, password } })
+    const payload = (res as any).data?.register
+    if (!payload) throw new Error('Register failed')
+    // Do not automatically persist token/user on register — require explicit login.
+    // This avoids auto-login after signup and lets the UI show a success message and prompt to sign in.
     return payload.user as User
-  }, [callGQL, save])
+  }, [save])
 
   const logout = useCallback(() => {
     try {
       localStorage.removeItem("authToken")
       localStorage.removeItem("user")
+      // Keep adminEmail as a persistent marker for the seeded/original admin.
+      // Removing it here caused subsequent users to be inferred as admin.
+      localStorage.removeItem("userRole")
     } catch {}
     setUser(null)
   }, [])

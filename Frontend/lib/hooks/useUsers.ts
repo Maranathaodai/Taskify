@@ -1,42 +1,28 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { gql } from "@apollo/client"
+import { useQuery } from "@tanstack/react-query"
+import { apolloClient } from "@/lib/apollo/client"
 
-const GRAPHQL_URL = typeof window !== "undefined" && (process.env.NEXT_PUBLIC_GRAPHQL_URL || "http://localhost:4000/graphql")
+const USERS_QUERY = gql`
+  query Users {
+    users { id name email role }
+  }
+`
 
 export function useUsers() {
-  const [users, setUsers] = useState<any[]>([])
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<any>(null)
+  const key = ["users"]
 
-  useEffect(() => {
-    const fetchUsers = async () => {
-      if (!GRAPHQL_URL) return
-      setLoading(true)
-      setError(null)
-      try {
-        const token = typeof window !== "undefined" ? localStorage.getItem("authToken") : null
-        const query = `query { users { id name email role } }`
-        const res = await fetch(GRAPHQL_URL, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          },
-          body: JSON.stringify({ query }),
-        })
-        const json = await res.json()
-        if (json.errors) throw new Error(json.errors[0]?.message || "GraphQL error")
-        setUsers(json.data.users || [])
-      } catch (err) {
-        setError(err)
-      } finally {
-        setLoading(false)
-      }
-    }
+  const query = useQuery({
+    queryKey: key,
+    queryFn: async () => {
+      const token = typeof window !== "undefined" ? localStorage.getItem("authToken") : null
+      const res = await apolloClient.query({ query: USERS_QUERY, fetchPolicy: "network-only", context: { headers: token ? { Authorization: `Bearer ${token}` } : {} } })
+      const data = (res as any).data
+      return data?.users || []
+    },
+    staleTime: 1000 * 30,
+  })
 
-    fetchUsers()
-  }, [])
-
-  return { users, loading, error }
+  return { users: query.data || [], loading: query.isLoading, error: query.error, refetch: query.refetch }
 }

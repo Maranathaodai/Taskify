@@ -7,7 +7,7 @@ This repository contains a full-stack Task Tracker app prototype split into two 
 
 This README summarizes what exists, how to run each part locally, current progress, and quick GraphQL examples to exercise the backend.
 
----
+----
 
 ## Quick status summary
 

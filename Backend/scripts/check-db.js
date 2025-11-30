@@ -1,5 +1,6 @@
 ﻿// Backend/scripts/check-db.js
 // Prints document counts for core collections so we can verify the DB state.
+//Check DB
 const fs = require('fs');
 const path = require('path');
 const mongoose = require('mongoose');
